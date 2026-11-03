@@ -1,0 +1,119 @@
+
+name: Build llama.cpp b11960
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: b11960
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            git \
+            libopenblas-dev \
+            libssl-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_INSTALL_BINDIR=bin \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
+            -DLLAMA_BUILD_NUMBER=11960 \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_TOOLS_INSTALL=ON \
+            -DGGML_BLAS=ON \
+            -DGGML_BLAS_VENDOR=OpenBLAS
+
+      - name: Build
+        run: |
+          cmake --build build --parallel 2
+
+      - name: Install
+        run: |
+          DESTDIR="$PWD/package" cmake --install build
+
+   
+     
+      - name: Verify installation
+        shell: bash
+        run: |
+          BIN="$PWD/package/usr/local/bin"
+          LIB="$PWD/package/usr/local/lib"
+
+          echo "=== Installed binaries ==="
+          ls -lh "$BIN"
+
+          echo "=== Version ==="
+          VERSION=$(LD_LIBRARY_PATH="$LIB" "$BIN/llama-server" --version 2>&1)
+          printf '%s\n' "$VERSION"
+
+          echo "=== Check build number ==="
+          if [[ "$VERSION" == *"build 11960"* ]]; then
+            echo "Build number verified: 11960"
+          else
+            echo "Unexpected build number!"
+            echo "Captured version: [$VERSION]"
+            exit 1
+          fi
+
+          echo "=== Shared libraries ==="
+          find "$LIB" \( -type f -o -type l \) -print
+
+          echo "=== Check dependencies ==="
+          for binary in "$BIN"/*; do
+            if [ -x "$binary" ] && [ -f "$binary" ]; then
+              echo "--- $(basename "$binary") ---"
+
+              DEPS=$(LD_LIBRARY_PATH="$LIB" ldd "$binary" 2>&1) || {
+                echo "$DEPS"
+                exit 1
+              }
+
+              printf '%s\n' "$DEPS"
+
+              if [[ "$DEPS" == *"not found"* ]]; then
+                echo "Missing shared library in $(basename "$binary")"
+                exit 1
+              fi
+            fi
+          done
+
+
+      - name: Package
+        run: |
+          tar -czf llama.cpp-b11960-linux-x64-openblas.tar.gz \
+            -C package usr/local
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama.cpp-b11960-linux-x64-openblas
+          path: llama.cpp-b11960-linux-x64-openblas.tar.gz
+          compression-level: 0
+          if-no-files-found: error
